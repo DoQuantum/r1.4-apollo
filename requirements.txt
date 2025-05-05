@@ -1,0 +1,15 @@
+# Core numerical & scientific libraries
+numpy==1.24.3
+scipy==1.10.1
+
+# Quantum simulation
+qutip==4.7.1
+
+# Spiking neural networks & ML backend
+torch==2.0.1
+snntorch==0.9.4
+
+# Plotting & utilities
+matplotlib==3.7.1
+PyYAML==6.0
+tqdm==4.65.0

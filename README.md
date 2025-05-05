@@ -46,7 +46,7 @@ quantum-snn-control/
 
 *Defines the transmon’s static physics.*
 
-* **TransmonParams**: device constants (omega\_0, alpha, T1, T2, N)
+* **TransmonParams**: device constants (w0, alpha, T1, T2, N)
 * **get\_operators()** → ladder & identity operators
 * **get\_free\_hamiltonian()** → Duffing Hamiltonian H₀
 * **get\_collapse\_operators()** → relaxation (T₁) and dephasing (T₂) collapse ops

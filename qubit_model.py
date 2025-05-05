@@ -12,14 +12,14 @@ qubit_model.py
 """
 import numpy as np 
 import qutip
-from dataclass import dataclass 
+from dataclasses import dataclass 
 
 h = 1.0
 
 @dataclass
 class TransmonParams:
     N: int #Hilbert-space dimentsion 
-    0: float 
+    w0: float 
     alpha:   float   # anharmonicity (rad/s)
     T1:  float   # relaxation time (s)
     T2:  float   # dephasing time (s)
@@ -47,10 +47,10 @@ def get_free_hamiltonian(params: TransmonParams):
 def get_collapse_operators(params: TransmonParams):
     a, adag, _ = get_operators(params)
     gamma1 = 1.0 / params.T1
-    gamma_phi = 1.0 / params.t2 - gamma1 / 2.0 
-    rturn [np.sqrt(gamma1) * a, np.sqrt(gamma_phi) * adag * a]
+    gamma_phi = 1.0 / params.T2 - gamma1 / 2.0 
+    return [np.sqrt(gamma1) * a, np.sqrt(gamma_phi) * adag * a]
 
-def get_intial_state(params: TransmonParams):
+def get_initial_state(params: TransmonParams):
     return qutip.basis(params.N, 0)
 
 

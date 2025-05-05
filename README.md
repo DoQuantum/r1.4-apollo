@@ -134,8 +134,8 @@ quantum-snn-control/
 ### 1. Clone and enter
 
 ```bash
-git clone https://github.com/your-org/quantum-snn-control.git
-cd quantum-snn-control
+git clone https://github.com/DoQuantum/SNNs-to-modulate-quantum-gate-pulses.git
+cd SNNs-to-modulate-quantum-gate-pulses
 ```
 
 ### 2. Ensure **uv** is installed

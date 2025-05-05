@@ -14,6 +14,8 @@ import numpy as np
 import qutip
 from dataclass import dataclass 
 
+h = 1.0
+
 @dataclass
 class TransmonParams:
     N: int #Hilbert-space dimentsion 
@@ -29,7 +31,6 @@ default_params = TransmonParams(
     T1=50e-6,
     T2=30e-6,
 )
-h = 1.0 
 
 def get_operators(params: TransmonParams):
     a = qutip.destroy(params.N)

@@ -28,13 +28,13 @@ Our pipeline:
 quantum-snn-control/
 ├── README.md
 ├── requirements.txt       # pin QuTiP, snnTorch, NumPy versions
+├── main.py                # (TODO) parameter sweeps, Monte Carlo robustness tests
 ├── qubit_model.py         # transmon parameters, H₀, collapse ops, initial state
 ├── control_hamiltonian.py # H₁ = a + a† and eps_t callback for drive waveforms
 ├── simulation.py          # physics engine: build H, run mesolve/propagator, smoke test
 ├── fidelity_metrics.py    # wrappers for state, process, and average gate fidelities
 ├── train_snn.py           # (TODO) SNN definition, forward pass → eps_samples → loss → BPTT
 ├── utils.py               # config loading, noise injection, logging helpers
-├── batch_runner.py        # (TODO) parameter sweeps, Monte Carlo robustness tests
 └── visualization.py       # (TODO) plotting populations, Bloch spheres, fidelity curves
 ```
 
@@ -96,10 +96,11 @@ quantum-snn-control/
 * Random noise injection into parameters
 * Logging and checkpointing helpers
 
-### `batch_runner.py`
+### `main.py`
 
 *Robustness & parameter sweeps (TODO).*
 
+* **Main project pipeline**
 * Loop over noise/drift scenarios
 * Aggregate mean, std, worst-case fidelities
 
@@ -124,7 +125,7 @@ quantum-snn-control/
 | **6. Loss = 1 − Fidelity**        | `train_snn.py`           | `loss = 1 - fidelity`                                               |
 | **7. Training loop**              | `train_snn.py`           | surrogate‐gradient BPTT, `loss.backward()`, `optimizer.step()`      |
 | **8. Config & logging**           | `utils.py`               | `load_config()`, `save_results()`, logging                          |
-| **9. Robustness sweeps**          | `batch_runner.py`        | `run_parameter_sweep()`, Monte Carlo loops                          |
+| **9. Robustness sweeps**          | `main.py`                | `run_parameter_sweep()`, Monte Carlo loops                          |
 | **10. Visualization & reporting** | `visualization.py`       | `plot_population_dynamics()`, `plot_fidelity_vs_epoch()`            |
 
 ---

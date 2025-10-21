@@ -12,9 +12,13 @@ batch_runner.py
 import sys
 sys.path.append('src')
 
+from utils import log
+
+
 def main():
     print("Hello from apollo!")
 
 
 if __name__ == "__main__":
-    main()
+    with log():
+        main()

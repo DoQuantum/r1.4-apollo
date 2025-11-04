@@ -1,0 +1,21 @@
+Spiking Neural Networks for Quantum Control Pulse Generation
+
+I got a feedforward spiking neural network to generate quantum control pulses with 85% fidelity for single-qubit gate operations. The task was to learn a pi-pulse that flips a qubit from ground state to excited state.
+
+The architecture uses a 4-layer feedforward SNN built with Leaky Integrate-and-Fire neurons. The network takes a constant input encoding the target quantum state and outputs membrane potentials from the final layer, which get interpreted as analog control signals. This is important because we need continuous-valued pulse amplitudes, not just binary spikes.
+
+The quantum simulator implements single-qubit evolution under time-varying control fields in the rotating frame approximation. Each timestep applies an X-rotation proportional to the pulse amplitude. I initially had a massive train-test mismatch where training reached 90% fidelity but evaluation crashed to 3%, which turned out to be because the training used rotating frame physics while evaluation used lab frame with a detuning term. Once I made both use consistent physics the performance matched up.
+
+The loss function balances three terms: fidelity loss weighted at 10x, smoothness regularization at 0.1x, and energy penalty at 0.01x. Early versions had the fidelity weight at 100x which caused the output neurons to saturate immediately and just scream at maximum amplitude instead of learning temporal structure. Gradient clipping at norm 1.0 was essential to prevent weight explosion.
+
+Initial attempts plateaued around 20% fidelity because the tanh output constraint was set to +/-2 and with only 50 timesteps at dt=0.01 the network physically could not generate enough integrated rotation angle to complete a pi flip. Increasing the amplitude range to +/-5 and doubling timesteps to 100 solved this.
+
+The generated pulses are noticeably jagged compared to what you would design analytically, but the quantum system acts as a low-pass filter so the state evolution trajectory is smooth. The network learned to ramp up the drive amplitude to around 3-4 in the first third of the pulse duration, which rotates the qubit population up to about 95%, then modulates the amplitude in a chaotic-looking pattern that prevents overshoot and settles at the final 85% fidelity.
+
+One counterintuitive result is that I had to switch from stochastic Poisson spike encoding to deterministic constant input. The original Poisson encoding meant every forward pass generated completely different random spike trains, so the pulse during evaluation was totally different from anything seen during training even though the average statistics were the same. Using constant rate-coded input ensures reproducible pulse generation.
+
+This is obviously just a proof of concept since real quantum gates operate on nanosecond timescales while SNN dynamics are millisecond-scale, and you would need gigahertz sampling rates for actual implementation. The hardware also needs to work at millikelvin temperatures which SNNs are not designed for. But it does demonstrate that SNNs can learn to generate temporal control patterns for dynamical systems when you read out the analog membrane potentials rather than just the binary spike outputs.
+
+The final gate error of 14.7% is way worse than what you get with optimal control theory methods like GRAPE or CRAB, which routinely achieve sub-1% errors. But those require full knowledge of the system Hamiltonian and explicit optimization. The SNN approach is learning purely from the fidelity reward signal through backpropagation, so it might be useful for systems where you don't have perfect models or need adaptive control that responds to time-varying noise or drift.
+
+Next steps would be trying two-qubit gates, adding decoherence and control noise to make it realistic, or seeing if recurrent SNNs can do better than feedforward. You could also try having the SNN learn multiple gate types and switch between them based on input encoding, basically a universal gate generator. The membrane time constants and refractory periods in the LIF neurons create intrinsic temporal dynamics that might be useful for shaped pulses, but right now they are mostly just adding noise compared to a standard RNN.

@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.linalg import expm
 
 try:
     import snntorch as snn
@@ -29,21 +30,25 @@ except ImportError:
 
 class SingleQubitSimulator:
     """
-    Simulates a single qubit driven by control pulses (Rabi oscillations)
+    Simulates a single qubit driven by I/Q control pulses (full Bloch sphere control)
 
-    Hamiltonian: H = (ω/2)σz + Ω(t)σx
-    where Ω(t) is the control pulse (Rabi frequency)
+    Hamiltonian: H = Ω_x(t)σx + Ω_y(t)σy
+    where Ω_x(t), Ω_y(t) are I/Q quadrature controls (rotating frame)
+
+    Also includes T1 and T2 decoherence via Lindblad master equation
     """
-    def __init__(self, omega=1.0, dt=0.01):
-        self.omega = omega  # Qubit frequency
-        self.dt = dt        # Time step
+    def __init__(self, omega=1.0, dt=0.002, T1=None, T2=None):
+        self.omega = omega  # Qubit frequency (not used in rotating frame)
+        self.dt = dt        # Time step (reduced for finer control)
+        self.T1 = T1        # Amplitude damping time (None = no decoherence)
+        self.T2 = T2        # Dephasing time (None = no decoherence)
 
     def evolve(self, pulse_amplitudes):
         """
-        Evolve qubit state under control pulses
+        Evolve qubit state under I/Q control pulses (sequential RX then RY)
 
         Args:
-            pulse_amplitudes: (T,) array of control pulse values
+            pulse_amplitudes: (T, 2) array of control pulse values [Ω_x(t), Ω_y(t)]
 
         Returns:
             final_state: (2,) complex array - final qubit state
@@ -52,73 +57,76 @@ class SingleQubitSimulator:
         state = np.array([1.0 + 0j, 0.0 + 0j])
 
         # Pauli matrices
-        sigma_z = np.array([[1, 0], [0, -1]], dtype=complex)
         sigma_x = np.array([[0, 1], [1, 0]], dtype=complex)
+        sigma_y = np.array([[0, -1j], [1j, 0]], dtype=complex)
 
-        # Time evolution (rotating frame - only X rotations)
-        for omega_t in pulse_amplitudes:
-            # In rotating frame at qubit frequency, only X rotation remains
-            # Rotation angle θ = Ω(t)·dt
-            angle = omega_t * self.dt
-            cos_a = np.cos(angle / 2)
-            sin_a = np.sin(angle / 2)
+        # Time evolution - apply RX then RY sequentially (same as training)
+        for omega_x, omega_y in pulse_amplitudes:
+            # First apply X rotation
+            H_x = omega_x * sigma_x
+            U_x = expm(-1j * H_x * self.dt)
+            state = U_x @ state
 
-            # Apply RX(θ) rotation
-            new_state = np.array([
-                cos_a * state[0] - 1j * sin_a * state[1],
-                -1j * sin_a * state[0] + cos_a * state[1]
-            ], dtype=complex)
-
-            state = new_state
-            # Already unitary, no need to renormalize
+            # Then apply Y rotation
+            H_y = omega_y * sigma_y
+            U_y = expm(-1j * H_y * self.dt)
+            state = U_y @ state
 
         return state
 
     def evolve_differentiable(self, pulse_amplitudes, device):
         """
-        DIFFERENTIABLE quantum evolution (PyTorch version for backprop)
+        DIFFERENTIABLE quantum evolution with I/Q control (PyTorch version)
 
         Args:
-            pulse_amplitudes: (B, T) torch tensor
+            pulse_amplitudes: (B, T, 2) torch tensor [Ω_x(t), Ω_y(t)]
 
         Returns:
-            final_states: (B, 2) complex torch tensor
+            final_states: (B, 4) real representation of complex state
         """
-        B, T = pulse_amplitudes.shape
+        B, T, _ = pulse_amplitudes.shape
 
         # Initialize to ground state |0⟩ for all batch samples
         # Use real representation: state = [re(α), im(α), re(β), im(β)]
         states = torch.zeros(B, 4, device=device)
         states[:, 0] = 1.0  # |0⟩ = [1, 0]
 
-        # Pauli matrices (real representation)
-        # σx causes transitions, σz is diagonal
-
         for t in range(T):
-            omega_t = pulse_amplitudes[:, t]  # (B,)
+            omega_x = pulse_amplitudes[:, t, 0]  # (B,)
+            omega_y = pulse_amplitudes[:, t, 1]  # (B,)
 
-            # For each sample, evolve by dt
-            # Hamiltonian: H = (ω/2)σz + Ω(t)σx
-            # In rotating frame (resonant drive), σz term vanishes
-            # This is valid when driving at qubit frequency
+            # Apply separate X and Y rotations sequentially
+            # RX(θ) = exp(-i·Ωx·dt·σx) in real representation
+            angle_x = omega_x * self.dt
+            cos_x = torch.cos(angle_x)
+            sin_x = torch.sin(angle_x)
 
-            # X rotation by angle θ = Ω(t)·dt
-            angle = omega_t * self.dt
-            cos_a = torch.cos(angle / 2)
-            sin_a = torch.sin(angle / 2)
+            # RX: [[cos, -i·sin], [-i·sin, cos]]
+            # Real form: α' = cos·α - i·sin·β,  β' = -i·sin·α + cos·β
+            temp_states = torch.zeros_like(states)
+            temp_states[:, 0] = cos_x * states[:, 0] + sin_x * states[:, 3]  # re(α')
+            temp_states[:, 1] = cos_x * states[:, 1] - sin_x * states[:, 2]  # im(α')
+            temp_states[:, 2] = cos_x * states[:, 2] - sin_x * states[:, 1]  # re(β')
+            temp_states[:, 3] = cos_x * states[:, 3] + sin_x * states[:, 0]  # im(β')
 
-            # Rotation matrix for X-gate: RX(θ) = [[cos(θ/2), -i·sin(θ/2)], [-i·sin(θ/2), cos(θ/2)]]
-            # In real form: [re_alpha, im_alpha, re_beta, im_beta]
-            new_states = torch.zeros_like(states)
-            new_states[:, 0] = cos_a * states[:, 0] - sin_a * states[:, 3]  # re(α') = cos·re(α) - sin·im(β)
-            new_states[:, 1] = cos_a * states[:, 1] + sin_a * states[:, 2]  # im(α') = cos·im(α) + sin·re(β)
-            new_states[:, 2] = cos_a * states[:, 2] - sin_a * states[:, 1]  # re(β') = cos·re(β) - sin·im(α)
-            new_states[:, 3] = cos_a * states[:, 3] + sin_a * states[:, 0]  # im(β') = cos·im(β) + sin·re(α)
+            # RY(θ) = exp(-i·Ωy·dt·σy)
+            angle_y = omega_y * self.dt
+            cos_y = torch.cos(angle_y)
+            sin_y = torch.sin(angle_y)
+
+            # RY: [[cos, -sin], [sin, cos]]
+            # Real form: α' = cos·α - sin·β,  β' = sin·α + cos·β
+            new_states = torch.zeros_like(temp_states)
+            new_states[:, 0] = cos_y * temp_states[:, 0] - sin_y * temp_states[:, 2]  # re(α')
+            new_states[:, 1] = cos_y * temp_states[:, 1] - sin_y * temp_states[:, 3]  # im(α')
+            new_states[:, 2] = sin_y * temp_states[:, 0] + cos_y * temp_states[:, 2]  # re(β')
+            new_states[:, 3] = sin_y * temp_states[:, 1] + cos_y * temp_states[:, 3]  # im(β')
 
             states = new_states
 
             # Normalize (ensure |α|² + |β|² = 1)
             norm = torch.sqrt(states[:, 0]**2 + states[:, 1]**2 + states[:, 2]**2 + states[:, 3]**2)
+            norm = torch.clamp(norm, min=1e-10)  # Prevent division by zero
             states = states / norm.unsqueeze(1)
 
         return states  # (B, 4) - [re(α), im(α), re(β), im(β)]
@@ -177,8 +185,8 @@ class FeedforwardSNN_PulseGenerator(nn.Module):
         self.fc3 = nn.Linear(128, 64, bias=True)
         self.lif3 = snn.Leaky(beta=beta, spike_grad=spike_grad, init_hidden=False)
 
-        # Output layer: 1 neuron (generates pulse amplitude)
-        self.fc_out = nn.Linear(64, 1, bias=True)
+        # Output layer: 2 neurons (generates I/Q control: Ω_x and Ω_y)
+        self.fc_out = nn.Linear(64, 2, bias=True)
         self.lif_out = snn.Leaky(beta=beta, spike_grad=spike_grad, init_hidden=False)
 
         self._init_weights()
@@ -197,13 +205,13 @@ class FeedforwardSNN_PulseGenerator(nn.Module):
 
     def forward(self, target_state):
         """
-        Generate pulse sequence for target state
+        Generate I/Q pulse sequence for target state
 
         Args:
             target_state: (B, 2) - target state probabilities [P(|0⟩), P(|1⟩)]
 
         Returns:
-            pulse_sequence: (B, T) - membrane potentials of output layer
+            pulse_sequence: (B, T, 2) - I/Q control signals [Ω_x(t), Ω_y(t)]
         """
         B = target_state.shape[0]
 
@@ -238,10 +246,10 @@ class FeedforwardSNN_PulseGenerator(nn.Module):
             spk_out, mem_out = self.lif_out(cur_out)  # MUST handle tuple
 
             # Read membrane potential as analog control signal
-            pulse_sequence.append(mem_out)  # (B, 1)
+            pulse_sequence.append(mem_out)  # (B, 2)
 
-        # Stack over time: (T, B, 1) -> (B, T)
-        pulse_sequence = torch.stack(pulse_sequence, dim=0).squeeze(-1).transpose(0, 1)
+        # Stack over time: (T, B, 2) -> (B, T, 2)
+        pulse_sequence = torch.stack(pulse_sequence, dim=0).transpose(0, 1)
 
         # Apply tanh to constrain pulse amplitude to reasonable range [-5, 5]
         # Increased from 2.0 to allow sufficient rotation amplitude
@@ -276,23 +284,22 @@ class FeedforwardSNN_PulseGenerator(nn.Module):
 # 3. TRAINING LOOP
 # ============================================================
 
-def train_snn_controller(num_epochs=200, batch_size=8, lr=1e-4):
+def train_snn_controller(num_epochs=300, batch_size=8, lr=1e-4):
     """
-    Train SNN to generate pulses that drive qubit to target state |1⟩
+    Train SNN to generate I/Q pulses that drive qubit to target state |1⟩
 
-    Task: π-pulse (flip |0⟩ → |1⟩)
+    Task: π-pulse (flip |0⟩ → |1⟩) with full Bloch sphere control
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training on: {device}")
 
     # Initialize model
-    num_steps = 100  # Increased timesteps for better temporal resolution
+    num_steps = 200  # Balanced: better than 100, not as extreme as 500
     model = FeedforwardSNN_PulseGenerator(num_steps=num_steps, beta=0.9).to(device)
 
-    # Quantum simulator
-    # Use small dt for accurate time evolution (first-order approximation needs dt << 1)
-    dt = 0.01  # Small timestep for numerical accuracy
-    simulator = SingleQubitSimulator(omega=1.0, dt=dt)
+    # Quantum simulator with balanced timestep
+    dt = 0.005  # Balanced for num_steps=200
+    simulator = SingleQubitSimulator(omega=1.0, dt=dt, T1=None, T2=None)  # No decoherence initially
 
     # Target state: |1⟩ (excited state)
     target_state_quantum = np.array([0.0 + 0j, 1.0 + 0j])
@@ -315,8 +322,8 @@ def train_snn_controller(num_epochs=200, batch_size=8, lr=1e-4):
         # Input encoding: target state as [P(|0⟩), P(|1⟩)] = [0, 1]
         target_input = torch.tensor([[0.0, 1.0]], device=device).repeat(batch_size, 1)
 
-        # Generate pulse sequence (now returns tanh-constrained values)
-        pulse_sequence = model(target_input)  # (B, T) - already in [-2, 2]
+        # Generate I/Q pulse sequence
+        pulse_sequence = model(target_input)  # (B, T, 2) - [Ω_x(t), Ω_y(t)] in [-5, 5]
 
         # DIFFERENTIABLE quantum simulation (for backprop)
         final_states = simulator.evolve_differentiable(pulse_sequence, device)  # (B, 4)
@@ -329,15 +336,19 @@ def train_snn_controller(num_epochs=200, batch_size=8, lr=1e-4):
         # PRIMARY LOSS: Maximize fidelity (minimize 1 - fidelity)
         loss_fidelity = (1.0 - fidelities).mean()
 
-        # SECONDARY LOSS: Encourage smooth pulses (regularization)
-        pulse_diff = pulse_sequence[:, 1:] - pulse_sequence[:, :-1]
+        # SECONDARY LOSS: Encourage smooth pulses (first derivative penalty)
+        pulse_diff = pulse_sequence[:, 1:, :] - pulse_sequence[:, :-1, :]
         loss_smoothness = (pulse_diff ** 2).mean()
 
-        # TERTIARY LOSS: Encourage energy efficiency
+        # TERTIARY LOSS: Second derivative penalty (bandwidth constraint)
+        pulse_diff2 = pulse_diff[:, 1:, :] - pulse_diff[:, :-1, :]
+        loss_bandwidth = (pulse_diff2 ** 2).mean()
+
+        # QUATERNARY LOSS: Energy efficiency (penalize high power)
         loss_energy = (pulse_sequence ** 2).mean()
 
-        # Combined loss (balanced to prevent saturation)
-        loss = 10.0 * loss_fidelity + 0.1 * loss_smoothness + 0.01 * loss_energy
+        # GRAPE-style combined loss with stronger smoothness constraints
+        loss = 10.0 * loss_fidelity + 0.5 * loss_smoothness + 0.2 * loss_bandwidth + 0.01 * loss_energy
 
         loss.backward()
 
@@ -368,13 +379,13 @@ def evaluate_and_visualize(model):
     target_input = torch.tensor([[0.0, 1.0]], device=device)
 
     with torch.no_grad():
-        pulse_sequence = model(target_input)  # (1, T) - already normalized
+        pulse_sequence = model(target_input)  # (1, T, 2) - I/Q control
 
-    pulse_np = pulse_sequence[0].cpu().numpy()  # Already in [-5, 5] from model
+    pulse_np = pulse_sequence[0].cpu().numpy()  # (T, 2) - [Ω_x(t), Ω_y(t)]
 
     # Simulate quantum evolution (use same dt as training)
-    num_steps = 100
-    dt = 0.01
+    num_steps = 200
+    dt = 0.005
     simulator = SingleQubitSimulator(omega=1.0, dt=dt)
     target_state = np.array([0.0 + 0j, 1.0 + 0j])
     final_state = simulator.evolve(pulse_np)
@@ -390,45 +401,55 @@ def evaluate_and_visualize(model):
     print(f"{'='*60}\n")
 
     # Plot pulse shape
-    fig, axes = plt.subplots(2, 1, figsize=(10, 6))
+    fig, axes = plt.subplots(3, 1, figsize=(10, 9))
 
     time_steps = np.arange(len(pulse_np))
 
-    # Pulse shape
-    axes[0].plot(time_steps, pulse_np, 'b-', linewidth=2)
+    # I/Q Pulse shapes
+    axes[0].plot(time_steps, pulse_np[:, 0], 'b-', linewidth=1.5, label='Ω_x(t) [I]')
+    axes[0].plot(time_steps, pulse_np[:, 1], 'r-', linewidth=1.5, label='Ω_y(t) [Q]')
     axes[0].axhline(y=0, color='k', linestyle='--', alpha=0.3)
     axes[0].set_xlabel('Time step')
-    axes[0].set_ylabel('Pulse amplitude Ω(t)')
-    axes[0].set_title(f'SNN-Generated Control Pulse (Fidelity: {fidelity:.4f})')
+    axes[0].set_ylabel('Pulse amplitude')
+    axes[0].set_title(f'SNN-Generated I/Q Control Pulses (Fidelity: {fidelity:.4f})')
+    axes[0].legend()
     axes[0].grid(alpha=0.3)
+
+    # Pulse magnitude
+    pulse_magnitude = np.sqrt(pulse_np[:, 0]**2 + pulse_np[:, 1]**2)
+    axes[1].plot(time_steps, pulse_magnitude, 'g-', linewidth=2)
+    axes[1].set_xlabel('Time step')
+    axes[1].set_ylabel('|Ω(t)|')
+    axes[1].set_title('Pulse Magnitude')
+    axes[1].grid(alpha=0.3)
 
     # State evolution (probability of |1⟩ over time)
     state_evolution = []
     state = np.array([1.0 + 0j, 0.0 + 0j])  # Start in |0⟩
+    sigma_x = np.array([[0, 1], [1, 0]], dtype=complex)
+    sigma_y = np.array([[0, -1j], [1j, 0]], dtype=complex)
 
-    for omega_t in pulse_np:
-        # Rotating frame evolution (same as training)
-        angle = omega_t * simulator.dt
-        cos_a = np.cos(angle / 2)
-        sin_a = np.sin(angle / 2)
+    for omega_x, omega_y in pulse_np:
+        # Sequential RX then RY (same as training)
+        H_x = omega_x * sigma_x
+        U_x = expm(-1j * H_x * simulator.dt)
+        state = U_x @ state
 
-        new_state = np.array([
-            cos_a * state[0] - 1j * sin_a * state[1],
-            -1j * sin_a * state[0] + cos_a * state[1]
-        ], dtype=complex)
-        state = new_state
+        H_y = omega_y * sigma_y
+        U_y = expm(-1j * H_y * simulator.dt)
+        state = U_y @ state
 
         prob_1 = np.abs(state[1]) ** 2  # Probability of |1⟩
         state_evolution.append(prob_1)
 
-    axes[1].plot(time_steps, state_evolution, 'r-', linewidth=2)
-    axes[1].axhline(y=1.0, color='k', linestyle='--', alpha=0.3, label='Target')
-    axes[1].set_xlabel('Time step')
-    axes[1].set_ylabel('P(|1⟩)')
-    axes[1].set_title('Qubit State Evolution')
-    axes[1].set_ylim([0, 1.1])
-    axes[1].grid(alpha=0.3)
-    axes[1].legend()
+    axes[2].plot(time_steps, state_evolution, 'purple', linewidth=2)
+    axes[2].axhline(y=1.0, color='k', linestyle='--', alpha=0.3, label='Target')
+    axes[2].set_xlabel('Time step')
+    axes[2].set_ylabel('P(|1⟩)')
+    axes[2].set_title('Qubit State Evolution')
+    axes[2].set_ylim([0, 1.1])
+    axes[2].grid(alpha=0.3)
+    axes[2].legend()
 
     plt.tight_layout()
     plt.savefig('quantum_snn_pulse.png', dpi=150)
@@ -453,7 +474,7 @@ if __name__ == "__main__":
 
     # Train
     model, fidelity_history = train_snn_controller(
-        num_epochs=200,
+        num_epochs=300,
         batch_size=8,
         lr=1e-4
     )

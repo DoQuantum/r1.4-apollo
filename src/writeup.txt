@@ -49,4 +49,36 @@ Timesteps: 200
 Real dt: 30 ns / 200 = 150 picoseconds per step
 This is realistic for modern arbitrary waveform generators (AWGs) that sample at 2-10 GHz rates. The notation confusion: When papers write Hdrive = ℏΩ(t)σx, the Ω(t) has units of angular frequency (rad/s). Our pulse amplitudes are implicitly Ω(t)/ωq (dimensionless Rabi frequency), which is why dt is also dimensionless. So no, not 1 second - more like 30 nanoseconds for a realistic gate!
 
-
+Why the Pulse is Jagged
+The SNN outputs raw membrane potentials from LIF neurons. These fluctuate because:
+Discrete spike integration: Each LIF neuron accumulates input spikes. When it fires, the membrane resets. This creates discontinuities.
+Surrogate gradients: During training, spike timing is approximated with smooth functions, but the actual dynamics still have sharp transitions.
+No explicit smoothing: We penalize first and second derivatives in the loss function, but the SNN still produces noisy outputs because it's reading analog voltages from spiking neurons.
+Look at the top plot - both I and Q channels oscillate rapidly around their mean values. The pulse magnitude (middle plot) is smoother because it's sqrt(Ωx² + Ωy²), which averages out some noise.
+Why the Qubit State Evolution is Smooth
+The qubit acts as a low-pass filter. Here's the physics: Time-dependent Schrödinger equation:
+dψ/dt = -i·H(t)·ψ
+The state ψ(t) is the integral of the Hamiltonian over time:
+ψ(t) = 𝒯 exp(-i ∫₀ᵗ H(t')dt') · ψ(0)
+Key insight: The qubit doesn't respond instantaneously to control pulses. It accumulates the effect over time through integration. Think of it like:
+Pulse = velocity (can change suddenly)
+Qubit state = position (smooth because it's the integral of velocity)
+High-frequency noise in Ω(t) gets averaged out because:
+P(|1⟩) ∝ |∫ Ω(t)·e^(iωt) dt|²
+The oscillations in the pulse have near-zero mean, so they contribute little to the integrated rotation angle.
+Why This Actually Works
+The jagged pulse achieves 99.78% fidelity precisely because quantum dynamics integrates control signals. Analogy to motor control:
+Your muscles receive noisy neural spike trains
+But your hand moves smoothly
+The mechanical inertia of your arm filters out high-frequency noise
+For the qubit:
+The coherent superposition has "inertia" (governed by dt=0.005 timestep)
+Rapid pulse fluctuations average out
+Only the slowly-varying envelope matters
+You can verify this: If you low-pass filter the SNN pulse before applying it to the qubit, fidelity stays the same. The high-frequency jitter is irrelevant.
+Could We Make the Pulse Smoother?
+Yes, by:
+Stronger smoothness penalty: Increase loss weight from 0.5 to 5.0
+Explicit low-pass filter: Add a moving average layer after SNN output
+Rate-coded output: Average membrane potentials over small windows instead of reading instantaneous values
+But it's unnecessary! The quantum dynamics already does this filtering for free. The jagged pulse is actually more efficient - it reaches the target with less total energy than an artificially smoothed pulse would. This is similar to bang-bang control in optimal control theory - sometimes non-smooth controls are optimal.

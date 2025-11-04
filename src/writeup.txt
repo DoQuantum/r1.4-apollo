@@ -34,3 +34,19 @@ Crosstalk between qubits
 Calibration drift over time
 But the core control mechanism is identical. You could drop our SNN-generated pulses into a real quantum control stack (like Qiskit Pulse) and they would work, modulo the timescale mismatch and hardware-specific calibrations.
 
+
+the units are dimensionless in our simulation. We're not using real SI units. What we have:
+dt = 0.005 (dimensionless time units)
+200 timesteps
+Total time = 200 × 0.005 = 1.0 (dimensionless)
+For real superconducting qubits: You need to set the time scale based on the qubit frequency. A typical transmon has:
+Qubit frequency: ωq/2π ≈ 5 GHz
+Period: T = 1/(5 GHz) ≈ 0.2 nanoseconds
+Natural time unit: 1/ωq ≈ 32 picoseconds
+If we map our dimensionless time to real units using the qubit frequency: Real gate time = 1.0 × (1/ωq) ≈ 32 picoseconds That's way too fast! Real single-qubit gates typically take 20-50 nanoseconds, which is about 1000x longer. To match real hardware timescales: You'd rescale so that total time = 1.0 corresponds to ~30 ns:
+Total time: 30 ns
+Timesteps: 200
+Real dt: 30 ns / 200 = 150 picoseconds per step
+This is realistic for modern arbitrary waveform generators (AWGs) that sample at 2-10 GHz rates. The notation confusion: When papers write Hdrive = ℏΩ(t)σx, the Ω(t) has units of angular frequency (rad/s). Our pulse amplitudes are implicitly Ω(t)/ωq (dimensionless Rabi frequency), which is why dt is also dimensionless. So no, not 1 second - more like 30 nanoseconds for a realistic gate!
+
+

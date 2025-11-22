@@ -214,13 +214,16 @@ class FeedforwardSNN_PulseGenerator(nn.Module):
             pulse_sequence: (B, T, 2) - I/Q control signals [Ω_x(t), Ω_y(t)]
         """
         B = target_state.shape[0]
+        device = target_state.device
 
         # Rate-encode target state to spike trains
         spike_input = self._rate_encode(target_state)  # (T, B, 2)
 
-        # Reset hidden states (init_hidden=False means we manually reset)
-        from snntorch import utils
-        utils.reset(self)
+        # Initialize membrane potentials explicitly (required for snntorch 0.9+)
+        mem1 = torch.zeros(B, 64, device=device)
+        mem2 = torch.zeros(B, 128, device=device)
+        mem3 = torch.zeros(B, 64, device=device)
+        mem_out = torch.zeros(B, 2, device=device)
 
         # Storage for output membrane potentials (analog pulse signal)
         pulse_sequence = []
@@ -229,21 +232,21 @@ class FeedforwardSNN_PulseGenerator(nn.Module):
         for t in range(self.num_steps):
             x_t = spike_input[t]  # (B, 2)
 
-            # Layer 1
+            # Layer 1 - explicitly pass membrane potential
             cur1 = self.fc1(x_t)
-            spk1, mem1 = self.lif1(cur1)  # MUST handle tuple
+            spk1, mem1 = self.lif1(cur1, mem1)
 
             # Layer 2
             cur2 = self.fc2(spk1)
-            spk2, mem2 = self.lif2(cur2)  # MUST handle tuple
+            spk2, mem2 = self.lif2(cur2, mem2)
 
             # Layer 3
             cur3 = self.fc3(spk2)
-            spk3, mem3 = self.lif3(cur3)  # MUST handle tuple
+            spk3, mem3 = self.lif3(cur3, mem3)
 
             # Output layer
             cur_out = self.fc_out(spk3)
-            spk_out, mem_out = self.lif_out(cur_out)  # MUST handle tuple
+            spk_out, mem_out = self.lif_out(cur_out, mem_out)
 
             # Read membrane potential as analog control signal
             pulse_sequence.append(mem_out)  # (B, 2)
@@ -307,7 +310,7 @@ def train_snn_controller(num_epochs=300, batch_size=8, lr=1e-4):
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    print(f"\nTask: Learn π-pulse to flip |0⟩ → |1⟩")
+    print(f"\nTask: Learn pi-pulse to flip |0> -> |1>")
     print(f"SNN timesteps: {num_steps}")
     print(f"Quantum dt: {dt}")
     print(f"Training for {num_epochs} epochs with batch size {batch_size}\n")
@@ -464,8 +467,8 @@ if __name__ == "__main__":
     print("\n" + "="*60)
     print("QUANTUM GATE PULSE CONTROL WITH SNN - MVP DEMO")
     print("="*60)
-    print("\nTask: Train feedforward SNN to generate π-pulse")
-    print("Goal: Flip qubit from |0⟩ to |1⟩ with high fidelity")
+    print("\nTask: Train feedforward SNN to generate pi-pulse")
+    print("Goal: Flip qubit from |0> to |1> with high fidelity")
     print("\nKey features:")
     print("  - Feedforward SNN (init_hidden=False)")
     print("  - Proper (spk, mem) tuple handling")

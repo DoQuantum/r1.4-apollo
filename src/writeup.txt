@@ -82,3 +82,60 @@ Stronger smoothness penalty: Increase loss weight from 0.5 to 5.0
 Explicit low-pass filter: Add a moving average layer after SNN output
 Rate-coded output: Average membrane potentials over small windows instead of reading instantaneous values
 But it's unnecessary! The quantum dynamics already does this filtering for free. The jagged pulse is actually more efficient - it reaches the target with less total energy than an artificially smoothed pulse would. This is similar to bang-bang control in optimal control theory - sometimes non-smooth controls are optimal.
+
+
+I'll examine the opened file to understand how training data is generated.
+Read c:\DEV\QuantumEEG\quantum_snn_pulse_demo.py
+The training data generation happens in the train_snn_controller function at quantum_snn_pulse_demo.py:290-369. Here's how it works:
+Training Data Generation
+Target State Creation (line 326):
+target_input = torch.tensor([[0.0, 1.0]], device=device).repeat(batch_size, 1)
+Each training batch contains the same target: [0.0, 1.0] representing the desired quantum state |1⟩
+This encodes [P(|0⟩), P(|1⟩)] probabilities
+Repeated for batch_size samples (default 8)
+Data Flow:
+Input encoding → The target state [0.0, 1.0] is rate-encoded into constant spike trains by _rate_encode() (lines 263-283)
+Pulse generation → The SNN generates I/Q control pulses (B, T, 2) representing [Ω_x(t), Ω_y(t)] (line 329)
+Quantum simulation → The pulses are fed to the differentiable quantum simulator (line 332)
+Fidelity calculation → Final quantum state is compared to target |1⟩ (line 333)
+No explicit dataset: The training is online - data is generated dynamically each epoch through the forward pass rather than using a pre-generated dataset. The loss signal comes from how well the generated pulses achieve the quantum state transition |0⟩ → |1⟩. The key insight is that this is an inverse problem: given a target state, learn to generate the control pulses that achieve it. The "training data" is really just the target specification repeated across batches, with gradient feedback from the quantum physics simulator.
+elaborate The pulses are fed to the differentiable quantum simulator (line 332)
+I'll explain how the differentiable quantum simulator processes the pulses to enable end-to-end training.
+Differentiable Quantum Simulation
+The evolve_differentiable() method (quantum_snn_pulse_demo.py:77-132) is the key to making this trainable. Here's the detailed breakdown:
+Input
+pulse_amplitudes: (B, T, 2)  # Batch × Timesteps × [Ω_x, Ω_y]
+B=8 samples, T=200 timesteps, 2 control channels (I/Q quadratures)
+Each pulse value is in range [-5, 5] (from tanh scaling, line 259)
+State Representation
+Instead of complex numbers [α, β], uses real representation for PyTorch differentiability:
+states = [re(α), im(α), re(β), im(β)]  # (B, 4)
+Initialized to ground state |0⟩: [1, 0, 0, 0] (line 92)
+Sequential Evolution Loop (lines 94-130)
+For each timestep t: 1. Extract control signals:
+omega_x = pulse_amplitudes[:, t, 0]  # X-rotation strength
+omega_y = pulse_amplitudes[:, t, 1]  # Y-rotation strength
+2. Apply RX rotation (lines 100-110):
+angle_x = omega_x * dt  # Rotation angle (control × time)
+Implements RX(θ) = exp(-i·θ·σx) in real form
+Updates state: α' = cos(θ)·α - i·sin(θ)·β
+3. Apply RY rotation (lines 112-123):
+angle_y = omega_y * dt
+Implements RY(θ) = exp(-i·θ·σy) in real form
+Updates state: α' = cos(θ)·α - sin(θ)·β
+4. Normalize (lines 127-130):
+norm = sqrt(|α|² + |β|²)
+states = states / norm  # Ensure quantum state normalization
+Why Sequential RX then RY?
+This matches the quantum control Hamiltonian:
+H = Ω_x(t)·σx + Ω_y(t)·σy
+By splitting into sequential rotations with small dt=0.005, it approximates the continuous evolution while remaining differentiable through PyTorch autograd.
+Output & Fidelity
+final_states: (B, 4) → fidelities: (B,)
+Target |1⟩ = [0, 0, 1, 0], so fidelity = re(β)² + im(β)² (line 151)
+Key for Training
+Every operation uses PyTorch tensors with gradient tracking:
+torch.cos(), torch.sin() → differentiable trig
+Element-wise operations → backprop through time
+Gradients flow from fidelity → pulses → SNN weights
+This allows the SNN to learn "if I output this pulse shape, it rotates the qubit to the target state" through standard backpropagation, despite simulating quantum physics!

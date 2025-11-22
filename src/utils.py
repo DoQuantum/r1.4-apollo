@@ -2,8 +2,6 @@
 utils.py
 
  - Common helper functions:
-     -  load/save JSON or YAML configurations
-     -  inject random noise into parameter sets
      -  logging and progress-bar utilities
      -  date/time stamping for output files
 """
@@ -18,18 +16,27 @@ from tqdm import tqdm
 TEMP = ENV['HOME'] + '/.cache/'
 DATA = 'data/'
 
+
+@contextmanager
+def pushd(new_dir):
+	previous_dir = os.getcwd()
+	os.makedirs(new_dir, exist_ok=True)
+	os.chdir(new_dir)
+	try: yield
+	finally:
+		os.chdir(previous_dir)
+
+
 @contextmanager
 def log():
-	os.makedirs(DATA, exist_ok=True)
 	timestamp = time.strftime('%Y%m%d-%H%M%S')
-	logfile = f'{DATA}/{timestamp}.log'
-	with open(logfile, 'wt+') as f:
-		_o = sys.stdout
-		_e = sys.stderr
-		sys.stdout = f
-		sys.stderr = f
-
-		try: yield
-		finally:
-			sys.stdout = _o
-			sys.stderr = _e
+	with pushd(f'{DATA}/{timestamp}'):
+		with open('output.log', 'wt+') as f:
+			_o = sys.stdout
+			_e = sys.stderr
+			sys.stdout = f
+			sys.stderr = f
+			try: yield
+			finally:
+				sys.stdout = _o
+				sys.stderr = _e
